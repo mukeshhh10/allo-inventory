@@ -1,5 +1,7 @@
 # Allo Inventory — Take-Home Exercise
 
+Live URL: https://allo-inventory-e1do.vercel.app/
+
 A Next.js inventory reservation platform solving the checkout race condition for multi-warehouse retail.
 
 **Live demo:** _deploy and update this_
@@ -155,3 +157,236 @@ On release:  reserved -= qty                 (units return to pool)
 - Rate limiting on reserve endpoint
 - Retry logic for `$transaction` serialization failures at high traffic
 - Admin dashboard, reservation history, webhooks on expiry
+
+
+
+
+# Allo Inventory — Take-Home Exercise
+
+A production-style inventory reservation system built with Next.js that solves the classic **checkout race condition problem** in multi-warehouse e-commerce systems.
+
+---
+
+# 🚀 Live Demo
+
+https://your-vercel-url.vercel.app
+
+---
+
+# 🧠 Problem Statement
+
+In e-commerce systems, stock consistency becomes difficult during checkout due to:
+
+- Slow payment flows (UPI / 3DS / wallet redirects)
+- Multiple users attempting to purchase the last available units
+- Race conditions leading to overselling or poor user experience
+
+### Core Challenge:
+Ensure that when multiple customers attempt to reserve the same inventory simultaneously, **only one succeeds**, and stock remains consistent.
+
+---
+
+# ⚙️ System Overview
+
+This system introduces a **reservation layer** between cart and payment.
+
+### Flow:
+
+1. User clicks **Reserve**
+2. System temporarily locks stock (PENDING reservation)
+3. User completes payment
+4. Reservation is either:
+   - ✅ Confirmed → stock is permanently reduced
+   - ❌ Released/Expired → stock is restored
+
+---
+
+# 🧱 Tech Stack
+
+- Next.js (App Router)
+- TypeScript
+- Prisma ORM
+- PostgreSQL (Neon)
+- Redis (optional locking layer)
+- Tailwind (UI)
+- Vercel (deployment)
+
+---
+
+# 🗄️ Data Model
+
+### Product
+Represents items for sale.
+
+### Warehouse
+Represents stock locations.
+
+### StockLevel
+Tracks inventory per product per warehouse:
+
+- `total` → physical stock
+- `reserved` → temporarily held stock
+
+### Reservation
+Tracks temporary holds:
+
+- `PENDING`
+- `CONFIRMED`
+- `RELEASED`
+- `expiresAt`
+
+### IdempotencyRecord
+Prevents duplicate reservation requests.
+
+---
+
+# 🔐 Core Features
+
+## 1. Inventory Listing
+- Shows products
+- Shows stock per warehouse
+- Calculates available stock dynamically:
+
+
+---
+
+## 2. Reservation System
+
+When user reserves stock:
+
+- System checks availability
+- Acquires distributed lock (Redis SET NX OR in-memory fallback)
+- Runs DB transaction:
+- Creates reservation
+- Increments reserved count
+
+### Concurrency Guarantee:
+- Only one request succeeds for the last unit
+- Others receive **409 Conflict**
+
+---
+
+## 3. Confirm Reservation
+
+On successful payment:
+
+- Reservation status → `CONFIRMED`
+- Stock is permanently reduced
+
+If expired:
+
+- Returns **410 Gone**
+
+---
+
+## 4. Release Reservation
+
+If user cancels or payment fails:
+
+- Status → `RELEASED`
+- Reserved stock is freed
+
+---
+
+## ⏳ Expiry Mechanism
+
+Two-layer approach:
+
+### 1. Lazy Expiry
+Every API read triggers cleanup:
+- Expired reservations are released automatically
+
+### 2. Cron Job (optional)
+- `/api/cron/expire`
+- Runs periodically to clean stale reservations
+
+Note: On Vercel Hobby plan, cron frequency is limited, so lazy expiry ensures correctness.
+
+---
+
+# ⚡ Concurrency Strategy (IMPORTANT)
+
+To prevent race conditions:
+
+### Layer 1 — Redis Lock (or fallback Map)
+- `SET NX` lock per product+warehouse
+- Ensures only one process modifies stock
+
+### Layer 2 — PostgreSQL Transaction
+- Ensures atomic updates
+- Prevents dirty reads
+- Maintains consistency
+
+### Result:
+Even under high concurrency:
+✔ No overselling  
+✔ No duplicate reservations  
+✔ Strong consistency guarantee  
+
+---
+
+# 🔁 Idempotency (Bonus)
+
+Implemented via `Idempotency-Key` header:
+
+- First request is stored in DB
+- Retry with same key returns same response
+- Prevents duplicate reservations on network retries
+
+---
+
+# 🧪 API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | /api/products | List products with stock |
+| GET | /api/warehouses | List warehouses |
+| POST | /api/reservations | Create reservation |
+| POST | /api/reservations/:id/confirm | Confirm purchase |
+| POST | /api/reservations/:id/release | Release reservation |
+
+---
+
+# 🧠 Key Design Decisions
+
+### 1. Reservation over direct stock deduction
+Avoids losing sales due to abandoned carts.
+
+### 2. Lazy expiry + cron hybrid
+Ensures correctness even if cron fails.
+
+### 3. Redis optional
+System still works without Redis using in-memory lock (dev mode).
+
+### 4. PostgreSQL as source of truth
+All stock operations are transaction-safe.
+
+---
+
+# ⚖️ Trade-offs
+
+- No authentication (simplified scope)
+- Payment gateway not integrated
+- Quantity handling simplified in UI
+- Redis optional for easier local setup
+
+---
+
+# 🚀 What I Would Improve With More Time
+
+- DB-level conditional updates for stronger concurrency safety
+- WebSockets for real-time stock updates
+- Rate limiting on reservation endpoint
+- Admin dashboard for monitoring inventory
+- Full audit logs for reservation lifecycle
+
+---
+
+# 🏁 How to Run Locally
+
+```bash
+npm install
+cp .env.example .env
+npx prisma migrate dev
+npm run db:seed
+npm run dev
